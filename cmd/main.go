@@ -22,13 +22,13 @@ import (
 // frontend or the database
 // More on these "tags" like `bson:"_id,omitempty"`: https://go.dev/wiki/Well-known-struct-tags
 type BookStore struct {
-	MongoID     primitive.ObjectID `bson:"_id,omitempty"`
-	ID          string
-	BookName    string
-	BookAuthor  string
-	BookEdition string
-	BookPages   string
-	BookYear    string
+	MongoID     primitive.ObjectID `bson:"_id,omitempty" json:"mongo_id,omitempty"`
+	ID          string             `json:"id"`
+	BookName    string             `json:"title"`
+	BookAuthor  string             `json:"author"`
+	BookEdition string             `json:"edition"`
+	BookPages   string             `json:"pages"`
+	BookYear    string             `json:"year"`
 }
 
 // Wraps the "Template" struct to associate a necessary method
@@ -166,12 +166,53 @@ func findAllBooks(coll *mongo.Collection) []map[string]interface{} {
 	var ret []map[string]interface{}
 	for _, res := range results {
 		ret = append(ret, map[string]interface{}{
-			"ID":          res.MongoID.Hex(),
-			"BookName":    res.BookName,
-			"BookAuthor":  res.BookAuthor,
-			"BookEdition": res.BookEdition,
-			"BookPages":   res.BookPages,
+			"id":      res.ID,
+			"title":   res.BookName,
+			"author":  res.BookAuthor,
+			"pages":   res.BookPages,
+			"edition": res.BookEdition,
+			"year":    res.BookYear,
 		})
+	}
+
+	return ret
+}
+
+func findAllAuthors(coll *mongo.Collection) []map[string]interface{} {
+	books := findAllBooks(coll)
+	uniqueAuthorsMap := make(map[string]bool)
+
+	for _, book := range books {
+		if author, ok := book["author"].(string); ok {
+			uniqueAuthorsMap[author] = true
+		}
+	}
+
+	var ret []map[string]interface{}
+	for author := range uniqueAuthorsMap {
+		ret = append(ret, map[string]interface{}{"AuthorName": author})
+	}
+
+	return ret
+}
+
+func findAllYears(coll *mongo.Collection) []map[string]interface{} {
+	books := findAllBooks(coll)
+	uniqueYearsMap := make(map[string]bool)
+
+	for _, book := range books {
+		// Assuming "BookYear" is a field in your book map
+		// and its value is a string.
+		// You might need to adjust the key and type assertion
+		// if your data structure is different.
+		if year, ok := book["year"].(string); ok {
+			uniqueYearsMap[year] = true
+		}
+	}
+
+	var ret []map[string]interface{}
+	for year := range uniqueYearsMap {
+		ret = append(ret, map[string]interface{}{"BookYear": year})
 	}
 
 	return ret
@@ -224,15 +265,18 @@ func main() {
 
 	e.GET("/books", func(c echo.Context) error {
 		books := findAllBooks(coll)
+		print(books)
 		return c.Render(200, "book-table", books)
 	})
 
 	e.GET("/authors", func(c echo.Context) error {
-		return c.NoContent(http.StatusNoContent)
+		authors := findAllAuthors(coll)
+		return c.Render(200, "author-table", authors)
 	})
 
 	e.GET("/years", func(c echo.Context) error {
-		return c.NoContent(http.StatusNoContent)
+		years := findAllYears(coll)
+		return c.Render(200, "year-table", years)
 	})
 
 	e.GET("/search", func(c echo.Context) error {
@@ -252,6 +296,122 @@ func main() {
 	e.GET("/api/books", func(c echo.Context) error {
 		books := findAllBooks(coll)
 		return c.JSON(http.StatusOK, books)
+	})
+	e.POST("/api/books", func(c echo.Context) error {
+		book := new(BookStore)
+		if err := c.Bind(book); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
+		}
+
+		// Generate a new ObjectID for MongoDB
+		book.MongoID = primitive.NewObjectID()
+
+		// We should also ensure the plain ID field is set, perhaps from the payload or generated.
+		// For now, let's assume it might come from the payload or needs a generation strategy.
+		// If ID is meant to be unique and user-provided, ensure it's present.
+		// If it's to be generated, you'd add logic here.
+		// For simplicity, if BookStore.ID is empty, we can use the MongoID as a string.
+		if book.ID == "" {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create book"})
+		}
+		// Check if a book with the same ID already exists
+		var existingBook BookStore
+		err := coll.FindOne(context.TODO(), bson.M{"id": book.ID}).Decode(&existingBook)
+		if err == nil {
+			// A book with this ID already exists
+			return c.JSON(http.StatusConflict, map[string]string{"error": "Book with ID " + book.ID + " already exists"})
+		} else if err != mongo.ErrNoDocuments {
+			// Some other error occurred during the find operation
+			log.Printf("Error checking for existing book: %v", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create book due to a database error"})
+		}
+
+		insertResult, err := coll.InsertOne(context.TODO(), book)
+		if err != nil {
+			log.Printf("Error inserting book: %v", err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create book"})
+		}
+
+		// Optionally, you can retrieve the inserted document to return it fully populated
+		// For now, we'll return the input book struct, which now includes the MongoID
+		log.Printf("Inserted a single document: %v", insertResult.InsertedID)
+		return c.JSON(http.StatusCreated, book)
+	})
+
+	e.PUT("/api/books/:id", func(c echo.Context) error {
+		idParam := c.Param("id") // This is the custom string ID, e.g., "asd34343"
+
+		var requestPayload map[string]interface{}
+		if err := c.Bind(&requestPayload); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request payload"})
+		}
+
+		// The document in the database will be identified by idParam.
+		filter := bson.M{"id": idParam}
+
+		// Dynamically build the $set operation based on fields present in the request.
+		updateSet := bson.M{}
+
+		if title, ok := requestPayload["title"].(string); ok {
+			updateSet["bookname"] = title // Use BSON field name "bookname"
+		}
+		if author, ok := requestPayload["author"].(string); ok {
+			updateSet["bookauthor"] = author // Use BSON field name "bookauthor"
+		}
+		if edition, ok := requestPayload["edition"].(string); ok {
+			updateSet["bookedition"] = edition // Use BSON field name "bookedition"
+		}
+		if pages, ok := requestPayload["pages"].(string); ok {
+			updateSet["bookpages"] = pages // Use BSON field name "bookpages"
+		}
+		if year, ok := requestPayload["year"].(string); ok {
+			updateSet["bookyear"] = year // Use BSON field name "bookyear"
+		}
+
+		// If no valid fields to update were provided in the request body
+		if len(updateSet) == 0 {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "No valid fields provided for update"})
+		}
+
+		update := bson.M{"$set": updateSet}
+
+		updateResult, err := coll.UpdateOne(context.TODO(), filter, update)
+		if err != nil {
+			log.Printf("Error updating book with ID %s: %v", idParam, err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update book"})
+		}
+
+		if updateResult.MatchedCount == 0 {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Book not found with ID " + idParam})
+		}
+
+		// Fetch the updated document from the database to return it
+		var updatedBookFromDB BookStore
+		err = coll.FindOne(context.TODO(), bson.M{"id": idParam}).Decode(&updatedBookFromDB)
+		if err != nil {
+			log.Printf("Error fetching updated book with ID %s after update: %v", idParam, err)
+			// This might indicate a race condition or an unexpected state if MatchedCount was > 0.
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to retrieve updated book details"})
+		}
+
+		return c.JSON(http.StatusOK, updatedBookFromDB)
+	})
+	e.DELETE("/api/books/:id", func(c echo.Context) error {
+		idParam := c.Param("id") // This is the custom string ID
+
+		filter := bson.M{"id": idParam}
+
+		deleteResult, err := coll.DeleteOne(context.TODO(), filter)
+		if err != nil {
+			log.Printf("Error deleting book with ID %s: %v", idParam, err)
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete book"})
+		}
+
+		if deleteResult.DeletedCount == 0 {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "Book not found with ID " + idParam})
+		}
+
+		return c.NoContent(http.StatusOK)
 	})
 
 	// We start the server and bind it to port 3030. For future references, this

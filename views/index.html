@@ -19,10 +19,10 @@
     <div hx-get="/books" hx-trigger="click" hx-target="#page-content" class="p-pointer">
       <span style="padding: 8px 0px; display: block;">Books</span>
     </div>
-    <div hx-get="/authors" hx-trigger="click" class="p-pointer">
+    <div hx-get="/authors" hx-trigger="click" hx-target="#page-content" class="p-pointer">
       <span style="padding: 8px 0px; display: block;">Authors</span>
     </div>
-    <div hx-get="/years" hx-trigger="click" class="p-pointer">
+    <div hx-get="/years" hx-trigger="click" hx-target="#page-content" class="p-pointer">
       <span style="padding: 8px 0px; display: block;">Years</span>
     </div>
     <div hx-get="/search" hx-trigger="click" hx-target="#page-content" class="p-pointer">
@@ -73,15 +73,40 @@
   </tr>
   {{ range . }}
   <tr id="row-{{ .ID }}">
-    <th> {{ .BookName }} </th>
-    <th> {{ .BookAuthor }} </th>
-    <th> {{ .BookEdition }} </th>
-    <th> {{ .BookPages }} </th>
+    <th> {{ .title }} </th>
+    <th> {{ .author }} </th>
+    <th> {{ .edition }} </th>
+    <th> {{ .pages }} </th>
   </tr>
   {{ end }}
 </table>
 {{ end }}
 
+{{ block "author-table" . }}
+<table>
+  <tr>
+    <th>Author Name</th>
+  </tr>
+  {{ range . }}
+  <tr>
+    <th> {{ .AuthorName }} </th>
+  </tr>
+  {{ end }}
+</table>
+{{ end }}
+
+{{ block "year-table" . }}
+<table>
+  <tr>
+    <th>Book Year</th>
+  </tr>
+  {{ range . }}
+  <tr>
+    <th> {{ .BookYear }} </th>
+  </tr>
+  {{ end }}
+</table>
+{{ end }}
 
 {{ block "search-bar" . }}
 <div class="input_wrap">
